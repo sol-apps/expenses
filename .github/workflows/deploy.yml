@@ -1,0 +1,39 @@
+name: Deploy to solhann.net
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.SERVER_IP }}" > ~/.ssh/known_hosts 2>/dev/null
+
+      # Cache-bust .css/.js references in every .html so browsers always pick up the latest deploy.
+      # Idempotent: only rewrites links that don't already carry a query string.
+      - name: Cache-bust asset URLs in HTML
+        run: |
+          v="${GITHUB_SHA:0:7}"
+          find . -maxdepth 3 -name '*.html' -not -path './.git/*' \
+            -exec sed -i -E "s#(\.(js|css))\"#\1?v=${v}\"#g" {} +
+
+      # Deploy key is jailed to `rrsync /var/www/apps`, so the target is RELATIVE: expenses/ -> /var/www/apps/expenses/
+      - name: Deploy via rsync
+        run: |
+          rsync -rlptz --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            --exclude '.git/' --exclude '.github/' --exclude 'README.md' \
+            ./ "sol@${{ secrets.SERVER_IP }}:expenses/"
