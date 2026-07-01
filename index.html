@@ -9,6 +9,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Press+Start+2P&display=swap" rel="stylesheet">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🧾%3C/text%3E%3C/svg%3E">
+  <script src="https://unpkg.com/pocketbase@0.27.0/dist/pocketbase.umd.js"></script>
+  <script src="pb-auth.js"></script>
   <style>
     :root{ --bg:#FFB84D; --ink:#2b2b29; --muted:#74726a; --panel:#fffaf0; --line:#2b2b29; --accent:#D56062; --ok:#3a8a4f; --warn:#c47a00; }
     [data-theme="dark"]{ --bg:#3f403e; --ink:#FFB84D; --muted:#b9b08f; --panel:#4b4c49; --line:#1b1b1a; --accent:#ff9aa0; --ok:#7bd28e; --warn:#ffce6e; }
@@ -88,6 +90,15 @@
     details[open] summary{ margin-bottom:10px; }
 
     .out-actions{ margin-top:18px; display:flex; gap:10px; flex-wrap:wrap; }
+
+    .ledger-row{ display:flex; gap:10px; align-items:center; padding:10px 12px; border:3px solid var(--line);
+      border-radius:6px; margin-top:10px; background:rgba(0,0,0,.03); flex-wrap:wrap; }
+    [data-theme="dark"] .ledger-row{ background:rgba(255,255,255,.05); }
+    .ledger-row .l-date{ font-size:12px; color:var(--muted); min-width:86px; }
+    .ledger-row .l-vendor{ font-weight:700; flex:1; min-width:120px; }
+    .ledger-row .l-total{ font-family:"Press Start 2P",monospace; font-size:10px; }
+    .ledger-row .l-cat{ font-size:11px; color:var(--muted); }
+    .ledger-row .l-del{ font-size:9px; padding:7px 9px; }
 
     a.home{ display:inline-block; margin-top:30px; font-weight:700; color:var(--accent); text-decoration:none; letter-spacing:.1em; font-size:13px; }
     a.home:hover{ text-decoration:underline; }
@@ -191,10 +202,19 @@
       <div class="questions" id="questions"></div>
 
       <div class="out-actions">
+        <button class="primary" id="saveLedger">SAVE TO LEDGER</button>
         <button id="copyJson">COPY AS JSON</button>
         <button id="copyText">COPY AS TEXT</button>
         <button id="reset">START OVER</button>
       </div>
+    </section>
+
+    <section class="panel" id="ledgerPanel">
+      <h2>▸ 3. LEDGER</h2>
+      <div class="sub" style="font-size:12px">Saved expenses, synced across your devices via an anonymous id.
+        The id gives persistence, not security — don't save anything that would hurt if it leaked.</div>
+      <div id="ledgerRows"></div>
+      <div class="status" id="ledgerStatus"></div>
     </section>
 
     <a class="home" href="https://create.solhann.net">← back to the gallery</a>
@@ -469,6 +489,65 @@ Rules:
     btn.textContent = msg;
     setTimeout(() => btn.textContent = old, 1200);
   }
+
+  // ── ledger (per-app PocketBase backend, anonymous owner id via pb-auth.js) ──
+  const ledgerRows = $('ledgerRows'), ledgerStatus = $('ledgerStatus'), saveBtn = $('saveLedger');
+  const pb = (typeof PocketBase !== 'undefined' && typeof PBAuth !== 'undefined') ? PBAuth.getClient() : null;
+
+  function setLedgerStatus(msg, isErr=false) {
+    ledgerStatus.textContent = msg;
+    ledgerStatus.classList.toggle('err', isErr);
+  }
+
+  function renderLedger(items) {
+    ledgerRows.innerHTML = '';
+    items.forEach(rec => {
+      const row = document.createElement('div');
+      row.className = 'ledger-row';
+      const cell = (cls, txt) => {
+        const d = document.createElement('div');
+        d.className = cls; d.textContent = txt; return d;
+      };
+      row.appendChild(cell('l-date', rec.date || '—'));
+      row.appendChild(cell('l-vendor', rec.vendor || '(no vendor)'));
+      row.appendChild(cell('l-total', (rec.total ?? '—') + ' ' + (rec.currency || '')));
+      row.appendChild(cell('l-cat', rec.category || ''));
+      const del = document.createElement('button');
+      del.type = 'button'; del.className = 'l-del'; del.textContent = '✕';
+      del.title = 'Delete';
+      del.onclick = async () => {
+        try { await pb.collection('expenses').delete(rec.id); loadLedger(); }
+        catch (e) { setLedgerStatus('Delete failed: ' + e.message, true); }
+      };
+      row.appendChild(del);
+      ledgerRows.appendChild(row);
+    });
+    setLedgerStatus(items.length ? '' : 'Nothing saved yet.');
+  }
+
+  async function loadLedger() {
+    if (!pb) { setLedgerStatus('Ledger offline — backend unavailable.', true); return; }
+    try {
+      const items = await pb.collection('expenses').getFullList({ sort: '-created' });
+      renderLedger(items);
+    } catch (e) {
+      setLedgerStatus('Ledger offline — backend not reachable.', true);
+    }
+  }
+
+  saveBtn.onclick = async () => {
+    if (!pb) { setLedgerStatus('Ledger offline — backend unavailable.', true); return; }
+    const f = gatherForm();
+    try {
+      await pb.collection('expenses').create({ ...f, owner: PBAuth.ownerId() });
+      flash(saveBtn, 'SAVED ✓');
+      loadLedger();
+    } catch (e) {
+      setLedgerStatus('Save failed: ' + e.message, true);
+    }
+  };
+
+  loadLedger();
 })();
 </script>
 </body>
